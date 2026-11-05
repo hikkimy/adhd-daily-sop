@@ -137,48 +137,85 @@ $('nextBtn').addEventListener('click', () => {
 const isNative = !!(window.Capacitor && Capacitor.isPluginAvailable && Capacitor.isPluginAvailable('LocalNotifications'));
 const LN = isNative ? Capacitor.Plugins.LocalNotifications : null;
 
+const diag = { platform: isNative ? '原生(App)' : '网页兜底', perm: '未检测', last: '' };
+function renderDiag() {
+  const el = $('diag');
+  if (el) el.textContent = `平台：${diag.platform} ｜ 通知：${diag.perm}${diag.last ? ' ｜ 上次：' + diag.last : ''}`;
+}
+async function refreshDiag() {
+  if (LN) {
+    try {
+      const p = await LN.checkPermissions();
+      diag.perm = p.display === 'granted' ? '已授权' : (p.display === 'denied' ? '被拒绝' : '未询问');
+    } catch (e) { diag.perm = '检测失败'; }
+  } else {
+    diag.perm = ('Notification' in window) ? ('网页 ' + Notification.permission) : '无网页通知';
+  }
+  renderDiag();
+}
+
 async function ensureNotifyPermission() {
-  if (!LN) return true; // 网页走浏览器 Notification API
+  if (!LN) {
+    if ('Notification' in window && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch (e) {}
+    }
+    return true; // 网页版由浏览器控制
+  }
   try {
     let p = await LN.checkPermissions();
     if (p.display !== 'granted') p = await LN.requestPermissions();
+    diag.perm = p.display === 'granted' ? '已授权' : (p.display === 'denied' ? '被拒绝' : '未询问');
+    renderDiag();
     return p.display === 'granted';
   } catch (e) { return false; }
 }
 
-async function setReminder(minutes) {
+async function scheduleNative(minutes) {
   const next = STEPS[current + 1];
   const body = next ? `该回主线了 👉 ${next.text.replace(/\n/g, ' ')}` : '该回到今日 SOP 了';
+  const at = new Date(Date.now() + minutes * 60000);
+  const label = minutes < 1 ? '10秒' : minutes + '分钟';
+  // 先试精确闹钟；安卓12+若缺「精确闹钟」权限会抛错，自动降级为宽松闹钟
+  const options = [{ at, allowWhileIdle: true, exact: true }, { at, allowWhileIdle: true }];
+  let lastErr = null;
+  for (const schedule of options) {
+    try {
+      const id = Math.floor(Math.random() * 1e9);
+      await LN.schedule({ notifications: [{ id, title: '⏰ 回主线提醒', body, schedule }] });
+      activeReminders.set(String(id), { min: minutes, label });
+      diag.last = `已设定 ${label}${schedule.exact ? '（精确）' : '（宽松，可能差1-2分）'}`;
+      renderDiag(); renderReminders();
+      toast(`已设定 ${label} 提醒：回到主线${schedule.exact ? '' : '（宽松，可能差一两分钟）'}`);
+      return;
+    } catch (e) { lastErr = e; }
+  }
+  diag.last = '调度失败：' + (lastErr && lastErr.message ? lastErr.message : lastErr);
+  renderDiag();
+  toast('提醒设定失败：' + (lastErr && lastErr.message ? lastErr.message : '未知错误') + '（多为通知权限或电池优化被拦截）');
+}
+
+async function setReminder(minutes) {
   if (LN) {
-    // 原生：在手机系统层排精确闹钟，关掉 App / 锁屏也会响（不依赖 FCM）
+    // 原生：在手机系统层排闹钟，关 App / 锁屏也会响（不依赖 FCM）
     const ok = await ensureNotifyPermission();
-    if (!ok) toast('未授权通知，提醒可能不响');
-    const id = Math.floor(Math.random() * 1e9);
-    await LN.schedule({
-      notifications: [{
-        id,
-        title: '⏰ 回主线提醒',
-        body,
-        schedule: { at: new Date(Date.now() + minutes * 60000), allowWhileIdle: true, exact: true },
-      }],
-    });
-    activeReminders.set(String(id), { min: minutes });
-    renderReminders();
-    toast(`已设定 ${minutes} 分钟提醒：回到主线`);
+    if (!ok) toast('未授权通知，提醒可能不响（请在系统设置允许通知）');
+    await scheduleNative(minutes);
   } else {
-    // 网页兜底：需保持页面打开（无服务端时只能如此）
-    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    // 网页兜底：需保持页面打开
+    if ('Notification' in window && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch (e) {}
+    }
     const id = 'w' + Date.now();
     const timer = setTimeout(() => {
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('⏰ 回主线提醒', { body });
-      } else { toast(body); }
-      activeReminders.delete(id);
-      renderReminders();
+        try { new Notification('⏰ 回主线提醒', { body: STEPS[current + 1] ? `该回主线了 👉 ${STEPS[current + 1].text.replace(/\n/g, ' ')}` : '该回主线了' }); }
+        catch (e) { toast('该回主线了'); }
+      } else { toast('该回主线了'); }
+      activeReminders.delete(id); renderReminders();
     }, minutes * 60000);
-    activeReminders.set(id, { min: minutes, timer });
+    activeReminders.set(id, { min: minutes, label: minutes < 1 ? '10秒' : minutes + '分钟', timer });
     renderReminders();
-    toast(`已设定 ${minutes} 分钟提醒（网页版需保持页面打开）`);
+    toast(`已设定 ${minutes < 1 ? '10秒' : minutes + '分钟'} 提醒（网页版需保持页面打开）`);
   }
 }
 
@@ -195,10 +232,10 @@ async function cancelReminder(id) {
 
 function renderReminders() {
   remindersEl.innerHTML = '';
-  for (const [id, { min }] of activeReminders) {
+  for (const [id, { min, label }] of activeReminders) {
     const row = document.createElement('div');
     row.className = 'reminder';
-    row.innerHTML = `<span>⏱ ${min} 分钟后提醒回主线</span>`;
+    row.innerHTML = `<span>⏱ ${label || min + '分钟'} 后提醒回主线</span>`;
     const btn = document.createElement('button');
     btn.textContent = '取消';
     btn.addEventListener('click', () => cancelReminder(id));
@@ -214,6 +251,12 @@ $('customBtn').addEventListener('click', () => {
   const v = parseInt($('customMin').value, 10);
   if (v > 0) setReminder(v);
 });
+$('testBtn').addEventListener('click', async () => {
+  if (!LN) { toast('当前为网页兜底，无法测试后台提醒'); return; }
+  await ensureNotifyPermission();
+  await scheduleNative(0.17); // ~10 秒后
+  toast('已设定 10 秒后测试提醒，请切到别的 App 或锁屏等待验证');
+});
 
 /* ============ 吐司 ============ */
 let toastTimer;
@@ -227,6 +270,7 @@ function toast(msg) {
 /* ============ 启动 ============ */
 $('today').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 updateVoiceBtn();
+refreshDiag();
 const startHint = document.querySelector('#start .hint');
 if (startHint) startHint.textContent = isNative
   ? '这是已安装的 App，关掉也能准时收到提醒。'
@@ -235,6 +279,7 @@ if (startHint) startHint.textContent = isNative
 $('startBtn').addEventListener('click', () => {
   startScreen.classList.add('hidden');
   guideScreen.classList.remove('hidden');
+  ensureNotifyPermission();
   render();
 });
 

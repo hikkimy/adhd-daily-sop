@@ -65,6 +65,8 @@ h1 { font-size: 26px; margin: 8px 0; }
   border-radius: 999px; padding: 10px 20px; font-size: 16px; cursor: pointer;
 }
 .chip:active { background: #334155; }
+.chip.ghost { background: transparent; border-style: dashed; color: #a5b4fc; margin-top: 4px; }
+.diag { margin-top: 6px; font-size: 13px; color: #94a3b8; word-break: break-word; }
 .custom { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 8px; }
 .custom input {
   width: 90px; background: var(--card); border: 1px solid #334155; border-radius: 10px;
