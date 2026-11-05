@@ -133,71 +133,63 @@ $('nextBtn').addEventListener('click', () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
-/* ============ 提醒：订阅 + 定时 ============ */
-function urlBase64ToUint8Array(b64) {
-  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
-  const s = atob(b64 + pad);
-  return new Uint8Array([...s].map((c) => c.charCodeAt(0)));
-}
+/* ============ 提醒：原生本地通知（Capacitor）为主，网页兜底 ============ */
+const isNative = !!(window.Capacitor && Capacitor.isPluginAvailable && Capacitor.isPluginAvailable('LocalNotifications'));
+const LN = isNative ? Capacitor.Plugins.LocalNotifications : null;
 
-async function ensureSubscription() {
-  if (subscription) return subscription;
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    toast('此浏览器不支持后台推送，将只用本地提醒');
-    return null;
-  }
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') {
-    toast('未授权通知，后台提醒可能不响');
-    return null;
-  }
-  const reg = await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    const { publicKey } = await (await fetch('/api/vapid-public-key')).json();
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
-  }
-  await fetch('/api/subscribe', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub),
-  });
-  subscription = sub;
-  return sub;
+async function ensureNotifyPermission() {
+  if (!LN) return true; // 网页走浏览器 Notification API
+  try {
+    let p = await LN.checkPermissions();
+    if (p.display !== 'granted') p = await LN.requestPermissions();
+    return p.display === 'granted';
+  } catch (e) { return false; }
 }
 
 async function setReminder(minutes) {
   const next = STEPS[current + 1];
   const body = next ? `该回主线了 👉 ${next.text.replace(/\n/g, ' ')}` : '该回到今日 SOP 了';
-  const sub = await ensureSubscription();
-  let id = null;
-  if (sub) {
-    const r = await fetch('/api/schedule', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subscription: sub, minutes, title: '⏰ 回主线提醒', body }),
+  if (LN) {
+    // 原生：在手机系统层排精确闹钟，关掉 App / 锁屏也会响（不依赖 FCM）
+    const ok = await ensureNotifyPermission();
+    if (!ok) toast('未授权通知，提醒可能不响');
+    const id = Math.floor(Math.random() * 1e9);
+    await LN.schedule({
+      notifications: [{
+        id,
+        title: '⏰ 回主线提醒',
+        body,
+        schedule: { at: new Date(Date.now() + minutes * 60000), allowWhileIdle: true, exact: true },
+      }],
     });
-    const j = await r.json();
-    id = j.id || null;
-  }
-  // 本地兜底：页面开着时也能弹
-  const timer = setTimeout(() => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('⏰ 回主线提醒', { body });
-    } else { toast(body); }
-    activeReminders.delete(id);
+    activeReminders.set(String(id), { min: minutes });
     renderReminders();
-  }, minutes * 60 * 1000);
-  activeReminders.set(id, { min: minutes, timer });
-  renderReminders();
-  toast(`已设定 ${minutes} 分钟提醒：回到主线`);
+    toast(`已设定 ${minutes} 分钟提醒：回到主线`);
+  } else {
+    // 网页兜底：需保持页面打开（无服务端时只能如此）
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    const id = 'w' + Date.now();
+    const timer = setTimeout(() => {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('⏰ 回主线提醒', { body });
+      } else { toast(body); }
+      activeReminders.delete(id);
+      renderReminders();
+    }, minutes * 60000);
+    activeReminders.set(id, { min: minutes, timer });
+    renderReminders();
+    toast(`已设定 ${minutes} 分钟提醒（网页版需保持页面打开）`);
+  }
 }
 
-function cancelReminder(id) {
-  const r = activeReminders.get(id);
-  if (r) clearTimeout(r.timer);
+async function cancelReminder(id) {
+  if (LN) {
+    try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch (e) {}
+  } else {
+    const r = activeReminders.get(id);
+    if (r && r.timer) clearTimeout(r.timer);
+  }
   activeReminders.delete(id);
-  if (id) fetch('/api/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
   renderReminders();
 }
 
@@ -235,6 +227,10 @@ function toast(msg) {
 /* ============ 启动 ============ */
 $('today').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 updateVoiceBtn();
+const startHint = document.querySelector('#start .hint');
+if (startHint) startHint.textContent = isNative
+  ? '这是已安装的 App，关掉也能准时收到提醒。'
+  : '提示：手机 Chrome 打开后点 ⋮ →「安装应用」，才能切后台收到提醒。';
 
 $('startBtn').addEventListener('click', () => {
   startScreen.classList.add('hidden');
