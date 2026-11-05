@@ -137,6 +137,23 @@ $('nextBtn').addEventListener('click', () => {
 const isNative = !!(window.Capacitor && Capacitor.isPluginAvailable && Capacitor.isPluginAvailable('LocalNotifications'));
 const LN = isNative ? Capacitor.Plugins.LocalNotifications : null;
 
+// 用专属高优先级通道，确保带声音+振动（三星/鸿蒙默认通道常静音）
+const CHANNEL_ID = 'sop-reminder-v2';
+async function ensureChannel() {
+  if (!LN || typeof LN.createChannel !== 'function') return;
+  try {
+    await LN.createChannel({
+      id: CHANNEL_ID,
+      name: '回主线提醒',
+      description: '定时提醒你回到今日 SOP 主线',
+      importance: 5, // 5=紧急/高：必带声音与振动
+      visibility: 1, // 锁屏可见
+      sound: true,
+      vibration: true,
+    });
+  } catch (e) { /* 旧版本插件不支持则忽略，回退默认通道 */ }
+}
+
 const diag = { platform: isNative ? '原生(App)' : '网页兜底', perm: '未检测', last: '' };
 function renderDiag() {
   const el = $('diag');
@@ -181,7 +198,7 @@ async function scheduleNative(minutes) {
   for (const schedule of options) {
     try {
       const id = Math.floor(Math.random() * 1e9);
-      await LN.schedule({ notifications: [{ id, title: '⏰ 回主线提醒', body, schedule }] });
+      await LN.schedule({ notifications: [{ id, title: '⏰ 回主线提醒', body, channelId: CHANNEL_ID, sound: true, vibration: true, schedule }] });
       activeReminders.set(String(id), { min: minutes, label });
       diag.last = `已设定 ${label}${schedule.exact ? '（精确）' : '（宽松，可能差1-2分）'}`;
       renderDiag(); renderReminders();
@@ -199,6 +216,7 @@ async function setReminder(minutes) {
     // 原生：在手机系统层排闹钟，关 App / 锁屏也会响（不依赖 FCM）
     const ok = await ensureNotifyPermission();
     if (!ok) toast('未授权通知，提醒可能不响（请在系统设置允许通知）');
+    await ensureChannel();
     await scheduleNative(minutes);
   } else {
     // 网页兜底：需保持页面打开
@@ -254,6 +272,7 @@ $('customBtn').addEventListener('click', () => {
 $('testBtn').addEventListener('click', async () => {
   if (!LN) { toast('当前为网页兜底，无法测试后台提醒'); return; }
   await ensureNotifyPermission();
+  await ensureChannel();
   await scheduleNative(0.17); // ~10 秒后
   toast('已设定 10 秒后测试提醒，请切到别的 App 或锁屏等待验证');
 });
@@ -271,6 +290,7 @@ function toast(msg) {
 $('today').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 updateVoiceBtn();
 refreshDiag();
+ensureChannel();
 const startHint = document.querySelector('#start .hint');
 if (startHint) startHint.textContent = isNative
   ? '这是已安装的 App，关掉也能准时收到提醒。'
