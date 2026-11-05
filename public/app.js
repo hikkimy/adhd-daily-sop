@@ -1,5 +1,5 @@
 /* ============ 每日 SOP 数据（来自「每日sop3.0.xls」，内置） ============ */
-const STEPS = [
+let STEPS = [
   { loc: '卧室', text: '转小猫 🐱' },
   { loc: '卧室', text: '自然醒、睁眼、戴眼镜、坐起来喝水、拉窗帘' },
   { loc: '卧室', text: '收拾床上东西、卧室复原' },
@@ -53,11 +53,38 @@ const STEPS = [
   { loc: '卧室', text: '23:00 睡觉 💤' },
 ];
 
+// 原始 SOP 的快照，供「新的一天」重置时恢复（分支选择会改动 STEPS）
+const ORIGINAL_STEPS = JSON.parse(JSON.stringify(STEPS));
+
 /* ============ 状态 ============ */
 let current = 0;
 let subscription = null;
 let voiceOn = localStorage.getItem('sop_voice') === '1';
-const activeReminders = new Map(); // id -> {min, timer}
+const activeReminders = new Map(); // id -> {min, label, timer?}（原生通知另有 id 字段）
+
+/* ============ 进度保存 / 恢复 ============ */
+const STATE_KEY = 'sop_state';
+const REM_KEY = 'sop_reminders';
+
+function saveState() {
+  try {
+    localStorage.setItem(STATE_KEY, JSON.stringify({
+      started: true,
+      current,
+      steps: STEPS,
+      date: new Date().toLocaleDateString('zh-CN'),
+    }));
+  } catch (_) {}
+}
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STATE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (s && Array.isArray(s.steps) && typeof s.current === 'number') return s;
+  } catch (_) {}
+  return null;
+}
 
 /* ============ DOM ============ */
 const $ = (id) => document.getElementById(id);
@@ -114,9 +141,12 @@ function render() {
     $('nextBtn').classList.remove('hidden');
     speak(step.text);
   }
+  saveState(); // 每次渲染都落盘，关掉重进也能续上
 }
 
 function finish() {
+  current = STEPS.length; // 标记为已完成
+  saveState();
   startScreen.classList.add('hidden');
   guideScreen.classList.remove('hidden');
   locBadge.textContent = '完成';
@@ -133,26 +163,33 @@ $('nextBtn').addEventListener('click', () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
+/* ============ 新的一天 / 重置 ============ */
+async function resetDay() {
+  if (!confirm('开始新的一天？当前进度会清空，并取消所有已设定的提醒。')) return;
+  if (LN) {
+    for (const [, r] of activeReminders) {
+      if (r.native && r.id != null) {
+        try { await LN.cancel({ notifications: [{ id: r.id }] }); } catch (_) {}
+      }
+    }
+  } else {
+    for (const [, r] of activeReminders) { if (r.timer) clearTimeout(r.timer); }
+  }
+  activeReminders.clear();
+  try { localStorage.removeItem(REM_KEY); } catch (_) {}
+  renderReminders();
+  STEPS = JSON.parse(JSON.stringify(ORIGINAL_STEPS));
+  current = 0;
+  try { localStorage.removeItem(STATE_KEY); } catch (_) {}
+  guideScreen.classList.add('hidden');
+  startScreen.classList.remove('hidden');
+  locBadge.textContent = ''; stepText.textContent = ''; progressEl.textContent = '';
+  toast('已重置，开始新的一天吧 🐱');
+}
+
 /* ============ 提醒：原生本地通知（Capacitor）为主，网页兜底 ============ */
 const isNative = !!(window.Capacitor && Capacitor.isPluginAvailable && Capacitor.isPluginAvailable('LocalNotifications'));
 const LN = isNative ? Capacitor.Plugins.LocalNotifications : null;
-
-// 用专属高优先级通道，确保带声音+振动（三星/鸿蒙默认通道常静音）
-const CHANNEL_ID = 'sop-reminder-v2';
-async function ensureChannel() {
-  if (!LN || typeof LN.createChannel !== 'function') return;
-  try {
-    await LN.createChannel({
-      id: CHANNEL_ID,
-      name: '回主线提醒',
-      description: '定时提醒你回到今日 SOP 主线',
-      importance: 5, // 5=紧急/高：必带声音与振动
-      visibility: 1, // 锁屏可见
-      sound: true,
-      vibration: true,
-    });
-  } catch (e) { /* 旧版本插件不支持则忽略，回退默认通道 */ }
-}
 
 const diag = { platform: isNative ? '原生(App)' : '网页兜底', perm: '未检测', last: '' };
 function renderDiag() {
@@ -190,31 +227,18 @@ async function ensureNotifyPermission() {
 async function scheduleNative(minutes) {
   const next = STEPS[current + 1];
   const body = next ? `该回主线了 👉 ${next.text.replace(/\n/g, ' ')}` : '该回到今日 SOP 了';
-  const triggerAt = Date.now() + minutes * 60000;
+  const at = new Date(Date.now() + minutes * 60000);
   const label = minutes < 1 ? '10秒' : minutes + '分钟';
-  const id = Math.floor(Math.random() * 1e9);
-  const alarms = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.ReminderAlarms;
-  if (alarms) {
-    try {
-      await alarms.schedule({ id, title: '⏰ 回主线提醒', body, triggerAtMillis: triggerAt });
-      activeReminders.set(String(id), { min: minutes, label, native: 'alarm' });
-      diag.last = `已设定 ${label}（系统闹钟+前台保活）`;
-      renderDiag(); renderReminders();
-      toast(`已设定 ${label} 提醒：回到主线（系统闹钟，关 App 也会响）`);
-      return;
-    } catch (e) {
-      diag.last = '插件调度失败，降级本地通知：' + (e && e.message ? e.message : e);
-      renderDiag();
-      // 失败后继续走下方兜底逻辑
-    }
-  }
-  // 兜底：原 LocalNotifications 逻辑（先精确、失败降级宽松）
-  const options = [{ at: new Date(triggerAt), allowWhileIdle: true, exact: true }, { at: new Date(triggerAt), allowWhileIdle: true }];
+  // 先试精确闹钟；安卓12+若缺「精确闹钟」权限会抛错，自动降级为宽松闹钟
+  const options = [{ at, allowWhileIdle: true, exact: true }, { at, allowWhileIdle: true }];
   let lastErr = null;
   for (const schedule of options) {
     try {
-      await LN.schedule({ notifications: [{ id, title: '⏰ 回主线提醒', body, channelId: CHANNEL_ID, sound: true, vibration: true, schedule }] });
-      activeReminders.set(String(id), { min: minutes, label });
+      const idNum = Math.floor(Math.random() * 1e9);
+      const idStr = String(idNum);
+      await LN.schedule({ notifications: [{ id: idNum, title: '⏰ 回主线提醒', body, schedule }] });
+      activeReminders.set(idStr, { min: minutes, label, native: true, id: idNum });
+      persistReminders();
       diag.last = `已设定 ${label}${schedule.exact ? '（精确）' : '（宽松，可能差1-2分）'}`;
       renderDiag(); renderReminders();
       toast(`已设定 ${label} 提醒：回到主线${schedule.exact ? '' : '（宽松，可能差一两分钟）'}`);
@@ -231,7 +255,6 @@ async function setReminder(minutes) {
     // 原生：在手机系统层排闹钟，关 App / 锁屏也会响（不依赖 FCM）
     const ok = await ensureNotifyPermission();
     if (!ok) toast('未授权通知，提醒可能不响（请在系统设置允许通知）');
-    await ensureChannel();
     await scheduleNative(minutes);
   } else {
     // 网页兜底：需保持页面打开
@@ -244,28 +267,47 @@ async function setReminder(minutes) {
         try { new Notification('⏰ 回主线提醒', { body: STEPS[current + 1] ? `该回主线了 👉 ${STEPS[current + 1].text.replace(/\n/g, ' ')}` : '该回主线了' }); }
         catch (e) { toast('该回主线了'); }
       } else { toast('该回主线了'); }
-      activeReminders.delete(id); renderReminders();
+      activeReminders.delete(id); persistReminders(); renderReminders();
     }, minutes * 60000);
     activeReminders.set(id, { min: minutes, label: minutes < 1 ? '10秒' : minutes + '分钟', timer });
+    persistReminders();
     renderReminders();
     toast(`已设定 ${minutes < 1 ? '10秒' : minutes + '分钟'} 提醒（网页版需保持页面打开）`);
   }
 }
 
 async function cancelReminder(id) {
+  const r = activeReminders.get(id);
   if (LN) {
-    try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch (e) {}
-  }
-  const alarms = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.ReminderAlarms;
-  if (alarms) {
-    try { await alarms.cancel({ id: Number(id) }); } catch (e) {}
-  }
-  if (!LN) {
-    const r = activeReminders.get(id);
+    if (r && r.native && r.id != null) {
+      try { await LN.cancel({ notifications: [{ id: r.id }] }); } catch (e) {}
+    }
+  } else {
     if (r && r.timer) clearTimeout(r.timer);
   }
   activeReminders.delete(id);
+  persistReminders();
   renderReminders();
+}
+
+function persistReminders() {
+  try {
+    const arr = [...activeReminders.values()].map((r) => ({ id: r.id, min: r.min, label: r.label, native: !!r.native }));
+    localStorage.setItem(REM_KEY, JSON.stringify(arr));
+  } catch (_) {}
+}
+function restoreReminders() {
+  if (!LN) return;
+  try {
+    const raw = localStorage.getItem(REM_KEY);
+    if (!raw) return;
+    JSON.parse(raw).forEach((r) => {
+      if (r && r.native && r.id != null) {
+        activeReminders.set(String(r.id), { min: r.min, label: r.label, native: true, id: r.id });
+      }
+    });
+    renderReminders();
+  } catch (_) {}
 }
 
 function renderReminders() {
@@ -289,10 +331,10 @@ $('customBtn').addEventListener('click', () => {
   const v = parseInt($('customMin').value, 10);
   if (v > 0) setReminder(v);
 });
+$('resetBtn').addEventListener('click', resetDay);
 $('testBtn').addEventListener('click', async () => {
   if (!LN) { toast('当前为网页兜底，无法测试后台提醒'); return; }
   await ensureNotifyPermission();
-  await ensureChannel();
   await scheduleNative(0.17); // ~10 秒后
   toast('已设定 10 秒后测试提醒，请切到别的 App 或锁屏等待验证');
 });
@@ -310,10 +352,9 @@ function toast(msg) {
 $('today').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 updateVoiceBtn();
 refreshDiag();
-ensureChannel();
 const startHint = document.querySelector('#start .hint');
 if (startHint) startHint.textContent = isNative
-  ? '这是已安装的 App，关掉也能准时收到提醒。'
+  ? '这是已安装的 App，关掉也能准时收到提醒，进度会自动保存。'
   : '提示：手机 Chrome 打开后点 ⋮ →「安装应用」，才能切后台收到提醒。';
 
 $('startBtn').addEventListener('click', () => {
@@ -322,6 +363,19 @@ $('startBtn').addEventListener('click', () => {
   ensureNotifyPermission();
   render();
 });
+
+// 恢复进度：上次没做完就直接续上，不用从头开始
+const saved = loadState();
+if (saved && saved.started && saved.current < saved.steps.length) {
+  STEPS = saved.steps;
+  current = saved.current;
+  startScreen.classList.add('hidden');
+  guideScreen.classList.remove('hidden');
+  restoreReminders();
+  ensureNotifyPermission();
+  render();
+  toast(`已恢复进度：第 ${current + 1} 步`);
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));

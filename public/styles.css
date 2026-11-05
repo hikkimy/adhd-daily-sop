@@ -34,6 +34,9 @@ h1 { font-size: 26px; margin: 8px 0; }
 .primary:active { transform: scale(.98); background: var(--brand-dark); }
 .big { width: 100%; padding: 18px; font-size: 19px; }
 .icon-btn { background: transparent; border: none; font-size: 22px; cursor: pointer; }
+.topbar-right { display: flex; align-items: center; gap: 4px; }
+.icon-btn.ghost { opacity: .85; font-size: 20px; padding: 4px 9px; border-radius: 10px; }
+.icon-btn.ghost:active { background: rgba(255,255,255,.1); }
 
 /* 顶栏 */
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 2px 6px; }
