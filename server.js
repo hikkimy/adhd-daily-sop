@@ -9,9 +9,11 @@ const VAPID_FILE = path.join(DATA_DIR, 'vapid.json');
 const SUBS_FILE = path.join(DATA_DIR, 'subs.json');
 const SCHED_FILE = path.join(DATA_DIR, 'sched.json');
 
-// --- VAPID 密钥（首次启动生成并持久化）---
+// --- VAPID 密钥（优先用环境变量，稳定；否则首次启动生成并持久化）---
 let vapidKeys;
-if (fs.existsSync(VAPID_FILE)) {
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  vapidKeys = { publicKey: process.env.VAPID_PUBLIC_KEY, privateKey: process.env.VAPID_PRIVATE_KEY };
+} else if (fs.existsSync(VAPID_FILE)) {
   vapidKeys = JSON.parse(fs.readFileSync(VAPID_FILE));
 } else {
   vapidKeys = webpush.generateVAPIDKeys();
