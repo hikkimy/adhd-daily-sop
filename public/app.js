@@ -190,14 +190,29 @@ async function ensureNotifyPermission() {
 async function scheduleNative(minutes) {
   const next = STEPS[current + 1];
   const body = next ? `该回主线了 👉 ${next.text.replace(/\n/g, ' ')}` : '该回到今日 SOP 了';
-  const at = new Date(Date.now() + minutes * 60000);
+  const triggerAt = Date.now() + minutes * 60000;
   const label = minutes < 1 ? '10秒' : minutes + '分钟';
-  // 先试精确闹钟；安卓12+若缺「精确闹钟」权限会抛错，自动降级为宽松闹钟
-  const options = [{ at, allowWhileIdle: true, exact: true }, { at, allowWhileIdle: true }];
+  const id = Math.floor(Math.random() * 1e9);
+  const alarms = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.ReminderAlarms;
+  if (alarms) {
+    try {
+      await alarms.schedule({ id, title: '⏰ 回主线提醒', body, triggerAtMillis: triggerAt });
+      activeReminders.set(String(id), { min: minutes, label, native: 'alarm' });
+      diag.last = `已设定 ${label}（系统闹钟+前台保活）`;
+      renderDiag(); renderReminders();
+      toast(`已设定 ${label} 提醒：回到主线（系统闹钟，关 App 也会响）`);
+      return;
+    } catch (e) {
+      diag.last = '插件调度失败，降级本地通知：' + (e && e.message ? e.message : e);
+      renderDiag();
+      // 失败后继续走下方兜底逻辑
+    }
+  }
+  // 兜底：原 LocalNotifications 逻辑（先精确、失败降级宽松）
+  const options = [{ at: new Date(triggerAt), allowWhileIdle: true, exact: true }, { at: new Date(triggerAt), allowWhileIdle: true }];
   let lastErr = null;
   for (const schedule of options) {
     try {
-      const id = Math.floor(Math.random() * 1e9);
       await LN.schedule({ notifications: [{ id, title: '⏰ 回主线提醒', body, channelId: CHANNEL_ID, sound: true, vibration: true, schedule }] });
       activeReminders.set(String(id), { min: minutes, label });
       diag.last = `已设定 ${label}${schedule.exact ? '（精确）' : '（宽松，可能差1-2分）'}`;
@@ -240,7 +255,12 @@ async function setReminder(minutes) {
 async function cancelReminder(id) {
   if (LN) {
     try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch (e) {}
-  } else {
+  }
+  const alarms = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.ReminderAlarms;
+  if (alarms) {
+    try { await alarms.cancel({ id: Number(id) }); } catch (e) {}
+  }
+  if (!LN) {
     const r = activeReminders.get(id);
     if (r && r.timer) clearTimeout(r.timer);
   }
