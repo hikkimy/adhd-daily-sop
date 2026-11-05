@@ -42,7 +42,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                 .setContentText(body)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setSound(Settings.System.DEFAULT_NOTIFICATION_URI)
-                .setVibrationPattern(new long[]{0, 300, 200, 300})
+                .setVibrate(new long[]{0, 300, 200, 300})
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setContentIntent(contentIntent)
