@@ -164,8 +164,7 @@ $('nextBtn').addEventListener('click', () => {
 });
 
 /* ============ 新的一天 / 重置 ============ */
-async function resetDay() {
-  if (!confirm('开始新的一天？当前进度会清空，并取消所有已设定的提醒。')) return;
+async function clearAllReminders() {
   if (LN) {
     for (const [, r] of activeReminders) {
       if (r.native && r.id != null) {
@@ -178,6 +177,11 @@ async function resetDay() {
   activeReminders.clear();
   try { localStorage.removeItem(REM_KEY); } catch (_) {}
   renderReminders();
+}
+
+async function resetDay() {
+  if (!confirm('开始新的一天？当前进度会清空，并取消所有已设定的提醒。')) return;
+  await clearAllReminders();
   STEPS = JSON.parse(JSON.stringify(ORIGINAL_STEPS));
   current = 0;
   try { localStorage.removeItem(STATE_KEY); } catch (_) {}
@@ -358,11 +362,15 @@ if (startHint) startHint.textContent = isNative
   : '提示：手机 Chrome 打开后点 ⋮ →「安装应用」，才能切后台收到提醒。';
 
 $('startBtn').addEventListener('click', () => {
+  clearAllReminders(); // 新的一天，清掉昨天遗留的待响提醒
   startScreen.classList.add('hidden');
   guideScreen.classList.remove('hidden');
   ensureNotifyPermission();
   render();
 });
+
+// 始终还原上次设定、尚未响的提醒，保证列表与取消准确
+restoreReminders();
 
 // 恢复进度：上次没做完就直接续上，不用从头开始
 const saved = loadState();
@@ -371,7 +379,6 @@ if (saved && saved.started && saved.current < saved.steps.length) {
   current = saved.current;
   startScreen.classList.add('hidden');
   guideScreen.classList.remove('hidden');
-  restoreReminders();
   ensureNotifyPermission();
   render();
   toast(`已恢复进度：第 ${current + 1} 步`);
