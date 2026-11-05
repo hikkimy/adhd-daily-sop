@@ -1,0 +1,15 @@
+{
+  "name": "每日 SOP 引导器",
+  "short_name": "每日SOP",
+  "description": "ADHD 友好：一次只做下一步，定时提醒回到主线",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F172A",
+  "theme_color": "#4F46E5",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

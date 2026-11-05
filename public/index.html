@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#4F46E5" />
+  <title>每日 SOP 引导器</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 开始页 -->
+    <section id="start" class="screen">
+      <div class="start-card">
+        <div class="cat">🐱</div>
+        <h1>每日 SOP 引导器</h1>
+        <p id="today" class="muted"></p>
+        <p class="muted small">一次只做下一步，走神了就定时把自己拉回来。</p>
+        <button id="startBtn" class="primary big">开始今日 SOP</button>
+        <p class="hint">提示：在手机 Chrome 打开后，点右上角 ⋮ →「安装应用」，才能切后台也收到提醒。</p>
+      </div>
+    </section>
+
+    <!-- 引导页 -->
+    <section id="guide" class="screen hidden">
+      <header class="topbar">
+        <span id="progress" class="muted small"></span>
+        <button id="voiceBtn" class="icon-btn" title="语音开关">🔇</button>
+      </header>
+
+      <main class="step-card">
+        <div id="locBadge" class="badge">位置</div>
+        <div id="stepText" class="step-text">下一步</div>
+        <div id="branch" class="branch hidden"></div>
+      </main>
+
+      <div class="actions">
+        <button id="nextBtn" class="primary big">✅ 完成，下一步</button>
+      </div>
+
+      <div class="timer-row">
+        <span class="muted small">定个时，提醒我回主线：</span>
+        <div class="chips">
+          <button class="chip" data-min="5">5分</button>
+          <button class="chip" data-min="10">10分</button>
+          <button class="chip" data-min="15">15分</button>
+          <button class="chip" data-min="30">30分</button>
+        </div>
+        <div class="custom">
+          <input id="customMin" type="number" min="1" max="240" placeholder="自定义" inputmode="numeric" />
+          <span>分</span>
+          <button id="customBtn" class="chip">设定</button>
+        </div>
+      </div>
+
+      <div id="reminders" class="reminders"></div>
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

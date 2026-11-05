@@ -1,0 +1,13 @@
+{
+  "name": "adhd-daily-sop",
+  "version": "1.0.0",
+  "description": "ADHD 每日 SOP 引导器 + 定时回主线提醒 (PWA + Web Push)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "web-push": "^3.6.7"
+  }
+}
